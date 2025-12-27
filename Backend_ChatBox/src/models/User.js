@@ -24,11 +24,6 @@ const userSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
-    // E2EE PUBLIC KEY
-    publicKey: {
-      type: String,
-      default: null,
-    },
     // BLOCK / PIN FEATURES
     blockedUsers: [
       {

@@ -4,7 +4,7 @@ import { protectRoute } from "../middleware/auth.middleware.js";
 import {
   blockUser,
   unblockUser,
-  getBlockUsers,
+  getBlockedUsers,
   pinUser,
   unpinUser,
   getPinnedUsers,

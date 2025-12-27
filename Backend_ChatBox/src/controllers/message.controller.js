@@ -22,32 +22,27 @@ export const getAllContacts = async (req, res) => {
   }
 };
 
-export const getMessagesByUserId = async (req, res) => {
+export const getMessagesByConversationId = async (req, res) => {
   try {
     const myId = req.user._id;
-    const { id: userToChatId } = req.params;
+    const { conversationId } = req.params;
 
-    // Check if either user has blocked the other
-    const [currentUser, otherUser] = await Promise.all([
-      User.findById(myId).select("blockedUsers"),
-      User.findById(userToChatId).select("blockedUsers")
-    ]);
+    // Find messages by conversation ID
+    const messages = await Message.find({ conversationId }).sort("createdAt");
 
-    if (currentUser?.blockedUsers?.includes(userToChatId) || 
-        otherUser?.blockedUsers?.includes(myId)) {
-      return res.status(403).json({ message: "Cannot access messages with blocked user" });
+    // Verify user is part of this conversation
+    const userInConversation = messages.some(msg =>
+      msg.senderId.toString() === myId.toString() ||
+      msg.receiverId.toString() === myId.toString()
+    );
+
+    if (messages.length > 0 && !userInConversation) {
+      return res.status(403).json({ message: "Not authorized to access this conversation" });
     }
-
-    const messages = await Message.find({
-      $or: [
-        { senderId: myId, receiverId: userToChatId },
-        { senderId: userToChatId, receiverId: myId },
-      ],
-    }).sort("createdAt");
 
     res.status(200).json(messages);
   } catch (error) {
-    console.error("Error in getMessagesByUserId:", error);
+    console.error("Error in getMessagesByConversationId:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 };
@@ -56,11 +51,33 @@ export const sendMessage = async (req, res) => {
   try {
     const senderId = req.user._id;
     const { id: receiverId } = req.params;
-    const { text } = req.body;
-    const imageFile = req.file;
+    const {
+      ciphertext,
+      messageType,
+      senderDeviceId,
+      conversationId,
+      sequenceNumber
+    } = req.body;
 
-    if (!text && !imageFile) {
-      return res.status(400).json({ message: "Text or image is required." });
+    // E2EE: Backend only handles ciphertext - never plaintext
+    if (!ciphertext || !messageType) {
+      return res.status(400).json({
+        message: "ciphertext and messageType are required for encrypted messages."
+      });
+    }
+
+    if (!senderDeviceId || !conversationId) {
+      return res.status(400).json({
+        message: "senderDeviceId and conversationId are required."
+      });
+    }
+
+    // Validate Signal Protocol message type
+    const validTypes = ["PreKeySignalMessage", "SignalMessage", "SenderKeyMessage"];
+    if (!validTypes.includes(messageType)) {
+      return res.status(400).json({
+        message: "Invalid messageType. Must be one of: " + validTypes.join(", ")
+      });
     }
 
     if (senderId.toString() === receiverId) {
@@ -82,20 +99,19 @@ export const sendMessage = async (req, res) => {
       return res.status(403).json({ message: "You have blocked this user" });
     }
 
-    let imagePath = null;
-    if (imageFile) {
-      // Build full public URL for uploaded file
-      const baseUrl = getBaseUrl();
-      imagePath = `${baseUrl}/uploads/${imageFile.filename}`;
-    }
-
-    let newMessage = await Message.create({
+    // Create encrypted message object (ciphertext only)
+    const messageData = {
+      conversationId,
       senderId,
       receiverId,
-      text: text || "",
-      image: imagePath,
+      senderDeviceId,
+      messageType,
+      ciphertext, // Backend never sees plaintext
+      sequenceNumber,
       status: "sent",
-    });
+    };
+
+    let newMessage = await Message.create(messageData);
 
     const receiverSocketId = getReceiverSocketId(receiverId);
 
@@ -104,15 +120,23 @@ export const sendMessage = async (req, res) => {
       newMessage.deliveredAt = new Date();
       await newMessage.save();
 
-      io.to(receiverSocketId).emit("newMessage", newMessage);
+      io.to(receiverSocketId).emit("newMessage", {
+        messageId: newMessage._id,
+        conversationId: newMessage.conversationId,
+        senderId: newMessage.senderId,
+        senderDeviceId: newMessage.senderDeviceId,
+        messageType: newMessage.messageType,
+        ciphertext: newMessage.ciphertext, // Backend only sends ciphertext
+        sequenceNumber: newMessage.sequenceNumber,
+        status: newMessage.status,
+        timestamp: newMessage.createdAt
+      });
     }
 
     // Send push notification if Firebase is initialized and receiver has tokens
     if (receiver.fcmTokens && receiver.fcmTokens.length > 0 && firebase.admin?.messaging) {
-      const messageText = text || (imageFile ? "📷 Image" : "New message");
-      
       console.log(`🔔 Sending push to ${receiver.fcmTokens.length} device(s)`);
-      
+
       // Send to ALL device tokens (not just first one)
       const sendPromises = receiver.fcmTokens.map(async (token) => {
         try {
@@ -120,13 +144,13 @@ export const sendMessage = async (req, res) => {
             token: token,
             notification: {
               title: `New message from ${sender.fullName}`,
-              body: messageText,
+              body: "New encrypted message",
             },
             data: {
               type: "MESSAGE",
               senderId: senderId.toString(),
               messageId: newMessage._id.toString(),
-              chatId: receiverId.toString(),
+              conversationId: conversationId,
               click_action: "FLUTTER_NOTIFICATION_CLICK"
             },
             android: {
@@ -146,17 +170,17 @@ export const sendMessage = async (req, res) => {
               }
             }
           };
-          
+
           // ✅ Use direct Firebase Admin SDK for background notifications
           const response = await firebase.admin.messaging().send(message);
           console.log(`✅ Push sent to ${token.substring(0, 10)}...`);
           return response;
-          
+
         } catch (error) {
           console.error(`❌ Failed to send to token ${token.substring(0, 10)}...:`, error.message || error.code);
-          
+
           // Remove invalid tokens
-          if (error.code === 'messaging/invalid-registration-token' || 
+          if (error.code === 'messaging/invalid-registration-token' ||
               error.code === 'messaging/registration-token-not-registered') {
             console.log(`🗑️ Removing invalid token: ${token.substring(0, 10)}...`);
             await User.findByIdAndUpdate(receiverId, {
@@ -166,14 +190,22 @@ export const sendMessage = async (req, res) => {
           return null;
         }
       });
-      
+
       // Send all notifications in parallel
-      await Promise.all(sendPromises).catch(err => 
+      await Promise.all(sendPromises).catch(err =>
         console.error('Batch notification error:', err)
       );
     }
 
-    res.status(201).json(newMessage);
+    res.status(201).json({
+      messageId: newMessage._id,
+      conversationId: newMessage.conversationId,
+      status: newMessage.status,
+      timestamp: newMessage.createdAt,
+      messageType: newMessage.messageType,
+      ciphertext: newMessage.ciphertext, // Backend only returns ciphertext
+      sequenceNumber: newMessage.sequenceNumber
+    });
   } catch (error) {
     console.error("Error in sendMessage:", error);
     res.status(500).json({ error: "Internal server error" });
@@ -229,13 +261,12 @@ export const getChatPartners = async (req, res) => {
           : msg.senderId.toString();
 
       if (!chatMap.has(partnerId)) {
-        const lastMessageText = msg.text 
-          ? (msg.text.length > 30 ? msg.text.substring(0, 30) + "..." : msg.text)
-          : msg.image 
-            ? "📷 Image" 
-            : msg.file 
-              ? "📎 File" 
-              : "Message";
+        // E2EE: Backend cannot read message content - show generic message type
+        const lastMessageText = msg.messageType === "PreKeySignalMessage"
+          ? "🔐 Initial encrypted message"
+          : msg.messageType === "SignalMessage"
+            ? "💬 Encrypted message"
+            : "🔑 Encrypted group message";
 
         chatMap.set(partnerId, {
           partnerId,
@@ -301,24 +332,10 @@ export const getChatPartners = async (req, res) => {
 };
 
 export const searchMessages = async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { q } = req.query;
-    const myId = req.user._id;
-
-    if (!q || q.trim() === "") return res.json([]);
-
-    const messages = await Message.find({
-      $or: [
-        { senderId: myId, receiverId: userId },
-        { senderId: userId, receiverId: myId },
-      ],
-      text: { $regex: q.trim(), $options: "i" },
-    }).sort({ createdAt: -1 });
-
-    res.json(messages);
-  } catch (err) {
-    console.error("Search error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
+  // E2EE: Backend cannot search ciphertext content
+  // Search functionality must be implemented on the client side after decryption
+  res.json({
+    message: "Message search is not available on the server due to end-to-end encryption. Please search decrypted messages on the client side.",
+    results: []
+  });
 };

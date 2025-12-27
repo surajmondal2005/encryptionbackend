@@ -1,39 +1,59 @@
-// src/models/Message.js
 import mongoose from "mongoose";
 
 const messageSchema = new mongoose.Schema(
   {
-    senderId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    receiverId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-
-    text: {
+    conversationId: {
       type: String,
-      trim: true,
-      maxlength: 2000,
-      default: "",
+      required: true, // Unique identifier for conversation
+    },
+    senderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    receiverId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    senderDeviceId: {
+      type: Number,
+      required: true, // Device that sent the message
     },
 
-    image: { type: String, default: null },
-
-    // FILE FIELD (PDF, DOC, XLS…)
-    file: {
+    // Signal Protocol message types
+    messageType: {
       type: String,
-      default: null,
+      enum: ["PreKeySignalMessage", "SignalMessage", "SenderKeyMessage"],
+      required: true,
     },
 
+    // Encrypted message content (ciphertext only)
+    ciphertext: {
+      type: String,
+      required: true, // Base64 encoded encrypted message
+    },
+
+    // Message metadata
+    sequenceNumber: {
+      type: Number,
+      default: null, // For Double Ratchet
+    },
+
+    // NOTE: Backend only stores ciphertext - never plaintext
+    // Legacy fields removed to enforce E2EE security
+
+    // Delivery status
     status: {
       type: String,
       enum: ["sent", "delivered", "read"],
       default: "sent",
     },
-
     deliveredAt: { type: Date, default: null },
     readAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
 
-// Guard against model overwrite in watch / hot-reload environments
 const Message = mongoose.models.Message || mongoose.model("Message", messageSchema);
-
 export default Message;

@@ -1,6 +1,7 @@
 // src/server.js - COMPLETE FIXED VERSION
 import express from "express";
 import cookieParser from "cookie-parser";
+
 import path from "path";
 import cors from "cors";
 import fs from "fs";
@@ -10,6 +11,8 @@ import authRoutes from "./routes/auth.route.js";
 import messageRoutes from "./routes/message.route.js";
 import userRoutes from "./routes/user.route.js";
 import pushRoutes from "./routes/push.route.js";
+import keysRoutes from "./routes/keys.route.js";
+import filesRoutes from "./routes/files.route.js";
 
 import { connectDB } from "./lib/db.js";
 import { ENV } from "./lib/env.js";
@@ -64,6 +67,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/push", pushRoutes);
+app.use("/api/keys", keysRoutes);
+app.use("/api/files", filesRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {

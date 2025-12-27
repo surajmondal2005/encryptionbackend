@@ -32,12 +32,15 @@ router.get("/contacts", getAllContacts);
 // GET CHAT PARTNERS LIST
 router.get("/chats", getChatPartners);
 
-// GET ALL MESSAGES WITH A USER
-router.get("/:id", getMessagesByUserId);
+// GET MESSAGES BY CONVERSATION ID (E2EE requirement)
+router.get("/:conversationId", getMessagesByUserId);
 
 // SEND MESSAGE (TEXT OR IMAGE)
+router.post("/send/:id", sendMessage);
+
+// SEND MESSAGE WITH FILE ATTACHMENT
 // IMPORTANT: frontend must send field name as "file"
-router.post("/send/:id", uploadSingle, sendMessage);
+router.post("/send/:id/with-file", uploadSingle, sendMessage);
 
 // MARK AS READ (BLUE TICKS)
 router.put("/read/:messageId", markMessageAsRead);

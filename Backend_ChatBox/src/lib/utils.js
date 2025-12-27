@@ -2,6 +2,13 @@
 import jwt from "jsonwebtoken";
 import { ENV } from "./env.js";
 
+// Generate unique conversation ID for two users
+export const generateConversationId = (userId1, userId2) => {
+  // Sort user IDs to ensure consistent conversation ID regardless of order
+  const sortedIds = [userId1.toString(), userId2.toString()].sort();
+  return `${sortedIds[0]}_${sortedIds[1]}`;
+};
+
 export const generateToken = (userId, res) => {
   const { JWT_SECRET } = ENV;
   if (!JWT_SECRET) {
